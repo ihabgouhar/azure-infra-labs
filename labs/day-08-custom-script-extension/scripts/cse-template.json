@@ -5,16 +5,15 @@
     {
       "type": "Microsoft.Compute/virtualMachines/extensions",
       "apiVersion": "2023-09-01",
-      "name": "vm-iis01/CustomScriptExtension",
+      "name": "vm-iis01/InstallIIS",
       "location": "eastus2",
-      "tags": { "day": "08" },
       "properties": {
         "publisher": "Microsoft.Compute",
         "type": "CustomScriptExtension",
         "typeHandlerVersion": "1.10",
         "autoUpgradeMinorVersion": true,
-        "protectedSettings": {
-          "commandToExecute": "powershell -ExecutionPolicy Unrestricted -Command \"Install-WindowsFeature Web-Server -IncludeManagementTools; Set-Content -Path C:\\inetpub\\wwwroot\\index.html -Value ('<h1>' + $env:COMPUTERNAME + ' - deployed by Custom Script Extension</h1>')\""
+        "settings": {
+          "commandToExecute": "powershell -ExecutionPolicy Unrestricted -Command Install-WindowsFeature -Name Web-Server -IncludeManagementTools"
         }
       }
     }

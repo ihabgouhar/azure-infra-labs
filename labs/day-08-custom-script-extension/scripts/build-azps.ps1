@@ -1,32 +1,25 @@
-# Day 08 - Az PowerShell
+# Day 08 - Az PowerShell. Run one block at a time.
 $rg = 'rg-lab-core-eus2'; $loc = 'eastus2'; $vmName = 'vm-iis01'
-$vnet   = Get-AzVirtualNetwork -Name 'vnet-lab-eus2' -ResourceGroupName $rg
-$subnet = Get-AzVirtualNetworkSubnetConfig -Name 'snet-app' -VirtualNetwork $vnet
-$asgApp = Get-AzApplicationSecurityGroup -ResourceGroupName $rg -Name 'asg-app'
-$ipcfg  = New-AzNetworkInterfaceIpConfig -Name 'ipconfig1' -Subnet $subnet -PrivateIpAddress '10.10.2.11' -ApplicationSecurityGroup $asgApp
-$nic    = New-AzNetworkInterface -Name 'vm-iis01-nic' -ResourceGroupName $rg -Location $loc -IpConfiguration $ipcfg -Tag @{ day = '08' }
 
-$cred = Get-Credential -UserName 'ihabadmin' -Message 'Local admin for vm-iis01'
-$cfg  = New-AzVMConfig -VMName $vmName -VMSize 'Standard_B2s' -SecurityType 'TrustedLaunch'
-$cfg  = Set-AzVMUefi -VM $cfg -EnableVtpm $true -EnableSecureBoot $true
-$cfg  = Set-AzVMOperatingSystem -VM $cfg -Windows -ComputerName $vmName -Credential $cred -ProvisionVMAgent -EnableAutoUpdate
-$cfg  = Set-AzVMSourceImage -VM $cfg -PublisherName 'MicrosoftWindowsServer' -Offer 'WindowsServer' -Skus '2022-datacenter-azure-edition' -Version 'latest'
-$cfg  = Set-AzVMOSDisk -VM $cfg -CreateOption FromImage -StorageAccountType 'StandardSSD_LRS' -DeleteOption 'Delete'
-$cfg  = Add-AzVMNetworkInterface -VM $cfg -Id $nic.Id -DeleteOption 'Delete'
-New-AzVM -ResourceGroupName $rg -Location $loc -VM $cfg -Tag @{ day = '08' }
+# Create the server (no public IP; disk + NIC deleted with the VM)
+$subnet = Get-AzVirtualNetwork -Name 'vnet-lab-eus2' -ResourceGroupName $rg | Get-AzVirtualNetworkSubnetConfig -Name 'snet-app'
+$nic  = New-AzNetworkInterface -Name 'vm-iis01-nic' -ResourceGroupName $rg -Location $loc -SubnetId $subnet.Id
+$cred = Get-Credential -UserName 'ihabadmin' -Message 'Password for vm-iis01'
+$vm = New-AzVMConfig -VMName $vmName -VMSize 'Standard_B2s' -SecurityType 'TrustedLaunch'
+$vm = Set-AzVMOperatingSystem -VM $vm -Windows -ComputerName $vmName -Credential $cred -ProvisionVMAgent
+$vm = Set-AzVMSourceImage -VM $vm -PublisherName 'MicrosoftWindowsServer' -Offer 'WindowsServer' -Skus '2022-datacenter-azure-edition' -Version 'latest'
+$vm = Set-AzVMOSDisk -VM $vm -CreateOption FromImage -StorageAccountType 'StandardSSD_LRS' -DeleteOption 'Delete'
+$vm = Add-AzVMNetworkInterface -VM $vm -Id $nic.Id -DeleteOption 'Delete'
+New-AzVM -ResourceGroupName $rg -Location $loc -VM $vm -Tag @{ day = '08' }
 
-# Run Command - before
-(Invoke-AzVMRunCommand -ResourceGroupName $rg -VMName $vmName -CommandId 'RunPowerShellScript' `
-  -ScriptString 'Get-WindowsFeature Web-Server | Select-Object Name, InstallState').Value[0].Message
+# BEFORE check (expect "Available")
+(Invoke-AzVMRunCommand -ResourceGroupName $rg -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString 'Get-WindowsFeature -Name Web-Server').Value[0].Message
 
-# Custom Script Extension
-$cmd = 'powershell -ExecutionPolicy Unrestricted -Command "Install-WindowsFeature Web-Server -IncludeManagementTools; Set-Content -Path C:\inetpub\wwwroot\index.html -Value (''<h1>'' + $env:COMPUTERNAME + '' - deployed by Custom Script Extension</h1>'')"'
-Set-AzVMExtension -ResourceGroupName $rg -VMName $vmName -Location $loc -Name 'CustomScriptExtension' `
+# Install IIS with the Custom Script Extension
+Set-AzVMExtension -ResourceGroupName $rg -VMName $vmName -Location $loc -Name 'InstallIIS' `
   -Publisher 'Microsoft.Compute' -ExtensionType 'CustomScriptExtension' -TypeHandlerVersion '1.10' `
-  -ProtectedSettings @{ commandToExecute = $cmd }
+  -Settings @{ commandToExecute = 'powershell -ExecutionPolicy Unrestricted -Command Install-WindowsFeature -Name Web-Server -IncludeManagementTools' }
 
-# NSG rule 300 (below Deny 4000)
-Get-AzNetworkSecurityGroup -ResourceGroupName $rg -Name 'nsg-app' |
-  Add-AzNetworkSecurityRuleConfig -Name 'Allow-App01-to-IIS01-80' -Priority 300 -Direction Inbound -Access Allow `
-    -Protocol Tcp -SourceAddressPrefix '10.10.2.10' -SourcePortRange '*' -DestinationAddressPrefix '10.10.2.11' -DestinationPortRange 80 |
-  Set-AzNetworkSecurityGroup | Out-Null
+# AFTER check (expect 200 + text)
+(Invoke-AzVMRunCommand -ResourceGroupName $rg -VMName $vmName -CommandId 'RunPowerShellScript' `
+  -ScriptString "Set-Content -Path C:\inetpub\wwwroot\index.html -Value 'Hello from vm-iis01 - built without RDP'; Invoke-WebRequest -Uri http://localhost -UseBasicParsing | Select-Object StatusCode, Content").Value[0].Message
